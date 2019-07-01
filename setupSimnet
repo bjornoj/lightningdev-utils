@@ -1,0 +1,54 @@
+# Before starting, install btcd, lnd and jq. `sudo snap install jq`
+# Also create a directory 'alice' in /home/user/.lnd/
+# And add btcd.conf and lnd.conf in /home/user/.lnd and /home/user/.btcd
+#
+# btcd.conf:
+# simnet=1
+# ----------------
+# lnd.conf:
+# noseedbackup=1
+#
+# [Bitcoin]
+# bitcoin.simnet=1
+# bitcoin.active=1
+# bitcoin.node=btcd
+#
+# [btcd]
+# btcd.rpcuser=kek
+# btcd.rpcpass=kek
+
+alias lnclia="lncli --rpcserver=localhost:10001 --lnddir=/home/user/.lnd/alice --macaroonpath=/home/user/.lnd/alice/data/chain/bitcoin/simnet/admin.macaroon"
+
+cp /home/user/.lnd/lnd.conf /home/user/.lnd/alice/
+
+# Set up BTCD
+btcd & pid=$!
+sleep 1
+x-terminal-emulator -e "lnd"
+sleep 5
+miningaddr=`lncli --network=simnet newaddress np2wkh | jq -r .address`
+# Shut down btcd, and start a new instance with a miningaddr.
+kill "$pid"
+sleep 3
+btcd --miningaddr=$miningaddr &
+
+# Start the other LND peer
+lnd --rpclisten=localhost:10001 --listen=localhost:10011 --restlisten=localhost:8001 --configfile=/home/user/.lnd/lnd.conf --lnddir=/home/user/.lnd/alice/ &
+# Its a good idea to save this command as 'lnda', by doing alias lnda=lnd --rpclisten=localhost:10001 --listen=localhost:10011 --restlisten=localhost:8001 --lnddir=/home/user/.lnd/alice/
+# Also save the lncli command 'alias lnclia=lncli --rpcserver=localhost:10001 --lnddir=/home/user/.lnd/alice --macaroonpath=/home/user/.lnd/alice/data/chain/bitcoin/simnet/admin.macaroon'
+
+# Open a channel between lnd and alice
+lnd_identity_pubkey=`lncli --network=simnet getinfo | jq -r .identity_pubkey`
+lnclia --network=simnet connect $lnd_identity_pubkey@localhost
+# In order to activate segwit(which is required for lightning), 300 blocks needs to be mined
+btcctl --simnet --rpcuser=kek --rpcpass=kek generate 300
+sleep 3
+lncli --network=simnet openchannel --node_key=`lncli --network=simnet listpeers | jq -r .peers[0].pub_key` --local_amt=8000000 --push_amt=4000000
+btcctl --simnet --rpcuser=kek --rpcpass=kek generate 10
+sleep 1
+
+# To see the channel
+lnclia --network=simnet listchannels
+
+# Try to pay a invoice, to make sure everything is set up correctly
+lnclia --network=simnet payinvoice `lncli --network=simnet addinvoice --amt=999 | jq -r .pay_req`
